@@ -4,6 +4,10 @@ from fastapi.responses import JSONResponse
 import httpx
 import os
 import uuid
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -20,7 +24,7 @@ CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.1"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.2"}
 
 @app.get("/health")
 async def health():
@@ -56,19 +60,47 @@ async def relay(path: str, request: Request):
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
+        # Build full URL
+        full_url = f"{CLEARTRIP_BASE_URL}/{path}"
+        
+        logger.info(f"Calling Cleartrip: {request.method} {full_url}")
+        logger.info(f"Headers: {headers}")
+        logger.info(f"Params: {params}")
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.request(
                 method=request.method,
-                url=f"{CLEARTRIP_BASE_URL}/{path}",
+                url=full_url,
                 json=body,
                 params=params,
                 headers=headers
             )
             
+            logger.info(f"Cleartrip Status: {response.status_code}")
+            logger.info(f"Cleartrip Response Text: {response.text[:500]}")  # First 500 chars
+            
+            # Check if response is JSON
+            try:
+                response_data = response.json()
+            except:
+                # Not JSON - return as text
+                return JSONResponse(
+                    content={
+                        "error": "Non-JSON response from Cleartrip",
+                        "status_code": response.status_code,
+                        "response_text": response.text[:1000]  # First 1000 chars
+                    },
+                    status_code=response.status_code
+                )
+            
             return JSONResponse(
-                content=response.json() if response.text else {},
+                content=response_data,
                 status_code=response.status_code
             )
             
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
     except Exception as e:
+        logger.error(f"Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
