@@ -24,7 +24,7 @@ CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.2"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.3"}
 
 @app.get("/health")
 async def health():
@@ -49,23 +49,32 @@ async def relay(path: str, request: Request):
         # Get query parameters
         params = dict(request.query_params)
         
-        # Generate unique request ID
-        request_id = str(uuid.uuid4())
+        # Get or generate tracking IDs
+        request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+        lineage_id = request.headers.get("x-lineage-id", f"relay-{uuid.uuid4()}")
         
         # Cleartrip required headers
         headers = {
             "Content-Type": "application/json",
             "x-ct-api-key": CLEARTRIP_API_KEY,
             "x-request-id": request_id,
+            "x-lineage-id": lineage_id,  # ✅ ADDED
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
-        logger.info(f"Calling Cleartrip: {request.method} {full_url}")
+        logger.info(f"=== Incoming Request ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Path: {path}")
+        logger.info(f"Headers from client: x-lineage-id={request.headers.get('x-lineage-id')}, x-request-id={request.headers.get('x-request-id')}")
+        logger.info(f"=== Forwarding to Cleartrip ===")
+        logger.info(f"URL: {full_url}")
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
+        if body:
+            logger.info(f"Body preview: {str(body)[:200]}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.request(
@@ -76,8 +85,9 @@ async def relay(path: str, request: Request):
                 headers=headers
             )
             
-            logger.info(f"Cleartrip Status: {response.status_code}")
-            logger.info(f"Cleartrip Response Text: {response.text[:500]}")  # First 500 chars
+            logger.info(f"=== Cleartrip Response ===")
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Response preview: {response.text[:500]}")
             
             # Check if response is JSON
             try:
@@ -88,7 +98,7 @@ async def relay(path: str, request: Request):
                     content={
                         "error": "Non-JSON response from Cleartrip",
                         "status_code": response.status_code,
-                        "response_text": response.text[:1000]  # First 1000 chars
+                        "response_text": response.text[:1000]
                     },
                     status_code=response.status_code
                 )
@@ -102,5 +112,5 @@ async def relay(path: str, request: Request):
         logger.error(f"HTTP Error: {str(e)}")
         raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        logger.error(f"Error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
