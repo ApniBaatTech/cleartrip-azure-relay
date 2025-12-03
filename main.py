@@ -60,6 +60,10 @@ async def relay(path: str, request: Request):
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
+        # Add x-lineage-id for search APIs (if POST request)
+        if request.method == "POST":
+            headers["x-lineage-id"] = str(uuid.uuid4())
+        
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
