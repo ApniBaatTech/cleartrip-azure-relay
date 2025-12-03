@@ -60,10 +60,6 @@ async def relay(path: str, request: Request):
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
-        # Add x-lineage-id for search APIs (if POST request)
-        if request.method == "POST":
-            headers["x-lineage-id"] = str(uuid.uuid4())
-        
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
@@ -81,7 +77,7 @@ async def relay(path: str, request: Request):
             )
             
             logger.info(f"Cleartrip Status: {response.status_code}")
-            logger.info(f"Cleartrip Response Text: {response.text[:500]}")  # First 500 chars
+            logger.info(f"Cleartrip Response Text: {response.text[:500]}")
             
             # Check if response is JSON
             try:
@@ -92,7 +88,7 @@ async def relay(path: str, request: Request):
                     content={
                         "error": "Non-JSON response from Cleartrip",
                         "status_code": response.status_code,
-                        "response_text": response.text[:1000]  # First 1000 chars
+                        "response_text": response.text[:1000]
                     },
                     status_code=response.status_code
                 )
