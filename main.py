@@ -77,7 +77,7 @@ async def relay(path: str, request: Request):
             )
             
             logger.info(f"Cleartrip Status: {response.status_code}")
-            logger.info(f"Cleartrip Response Text: {response.text[:500]}")
+            logger.info(f"Cleartrip Response Text: {response.text[:500]}")  # First 500 chars
             
             # Check if response is JSON
             try:
@@ -88,7 +88,7 @@ async def relay(path: str, request: Request):
                     content={
                         "error": "Non-JSON response from Cleartrip",
                         "status_code": response.status_code,
-                        "response_text": response.text[:1000]
+                        "response_text": response.text[:1000]  # First 1000 chars
                     },
                     status_code=response.status_code
                 )
