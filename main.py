@@ -24,7 +24,7 @@ CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.2"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.3"}
 
 @app.get("/health")
 async def health():
@@ -52,7 +52,7 @@ async def relay(path: str, request: Request):
         # Generate unique request ID
         request_id = str(uuid.uuid4())
         
-        # Cleartrip required headers
+        # Cleartrip required headers (base headers for all APIs)
         headers = {
             "Content-Type": "application/json",
             "x-ct-api-key": CLEARTRIP_API_KEY,
@@ -60,12 +60,29 @@ async def relay(path: str, request: Request):
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
+        # Add x-lineage-id ONLY for Search, Detail, and Booking APIs
+        # These are POST endpoints that require lineage tracking
+        search_booking_endpoints = [
+            "/search",
+            "/search-by-location",
+            "/detail",
+            "/provisional-book",
+            "/book"
+        ]
+        
+        # Check if current path needs x-lineage-id
+        if request.method == "POST" and any(endpoint in path for endpoint in search_booking_endpoints):
+            headers["x-lineage-id"] = str(uuid.uuid4())
+            logger.info(f"Added x-lineage-id for search/booking endpoint")
+        
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
         logger.info(f"Calling Cleartrip: {request.method} {full_url}")
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
+        if body:
+            logger.info(f"Body: {body}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.request(
@@ -77,7 +94,7 @@ async def relay(path: str, request: Request):
             )
             
             logger.info(f"Cleartrip Status: {response.status_code}")
-            logger.info(f"Cleartrip Response Text: {response.text[:500]}")  # First 500 chars
+            logger.info(f"Cleartrip Response Text: {response.text[:500]}")
             
             # Check if response is JSON
             try:
@@ -88,7 +105,7 @@ async def relay(path: str, request: Request):
                     content={
                         "error": "Non-JSON response from Cleartrip",
                         "status_code": response.status_code,
-                        "response_text": response.text[:1000]  # First 1000 chars
+                        "response_text": response.text[:1000]
                     },
                     status_code=response.status_code
                 )
