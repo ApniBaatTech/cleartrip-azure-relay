@@ -24,7 +24,7 @@ CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.4"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.5"}
 
 @app.get("/health")
 async def health():
@@ -52,16 +52,20 @@ async def relay(path: str, request: Request):
         # Generate unique request ID
         request_id = str(uuid.uuid4())
         
-        # Cleartrip required headers (base headers for all APIs)
+        # Base headers for ALL Cleartrip APIs
         headers = {
             "Content-Type": "application/json",
             "x-ct-api-key": CLEARTRIP_API_KEY,
             "x-request-id": request_id,
-            "x-meta-data": '{"locationVersion":"V2"}'
         }
         
-        # Add x-lineage-id for Search, Detail, and Booking APIs (POST only)
-        # Check if path contains any of these endpoint patterns
+        # Content APIs need x-meta-data header
+        # This includes: /content/locations, /content/location/hotels, /content/hotel-profile, etc.
+        if "content" in path.lower():
+            headers["x-meta-data"] = '{"locationVersion":"V2"}'
+            logger.info(f"✅ Added x-meta-data for content API")
+        
+        # Search, Detail, and Booking APIs need x-lineage-id
         needs_lineage = (
             "search" in path.lower() or 
             "detail" in path.lower() or 
@@ -69,20 +73,23 @@ async def relay(path: str, request: Request):
             "book" in path.lower()
         )
         
-        if request.method == "POST" and needs_lineage:
+        if needs_lineage:
             headers["x-lineage-id"] = str(uuid.uuid4())
-            logger.info(f"✅ Added x-lineage-id for endpoint: {path}")
+            logger.info(f"✅ Added x-lineage-id")
         
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
-        logger.info(f"Calling Cleartrip: {request.method} {full_url}")
+        logger.info(f"🔍 === REQUEST ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"URL: {full_url}")
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
         if body:
-            logger.info(f"Body: {str(body)[:200]}")  # First 200 chars of body
+            logger.info(f"Body: {str(body)[:500]}")
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Make request to Cleartrip
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.request(
                 method=request.method,
                 url=full_url,
@@ -91,31 +98,35 @@ async def relay(path: str, request: Request):
                 headers=headers
             )
             
-            logger.info(f"Cleartrip Status: {response.status_code}")
-            logger.info(f"Cleartrip Response Text: {response.text[:500]}")
+            logger.info(f"📡 === RESPONSE ===")
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Headers: {dict(response.headers)}")
+            logger.info(f"Body: {response.text[:1000]}")
             
-            # Check if response is JSON
+            # Try to parse as JSON
             try:
                 response_data = response.json()
-            except:
-                # Not JSON - return as text
                 return JSONResponse(
-                    content={
-                        "error": "Non-JSON response from Cleartrip",
-                        "status_code": response.status_code,
-                        "response_text": response.text[:1000]
-                    },
+                    content=response_data,
                     status_code=response.status_code
                 )
+            except:
+                # Return text response if not JSON
+                return JSONResponse(
+                    content={
+                        "error": "Non-JSON response",
+                        "status_code": response.status_code,
+                        "response_text": response.text[:2000]
+                    },
+                    status_code=response.status_code if response.status_code >= 400 else 500
+                )
             
-            return JSONResponse(
-                content=response_data,
-                status_code=response.status_code
-            )
-            
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout Error: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request to Cleartrip timed out")
     except httpx.HTTPError as e:
-        logger.error(f"HTTP Error: {str(e)}")
+        logger.error(f"❌ HTTP Error: {str(e)}")
         raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
