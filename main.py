@@ -24,7 +24,7 @@ CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.3"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.4"}
 
 @app.get("/health")
 async def health():
@@ -60,20 +60,18 @@ async def relay(path: str, request: Request):
             "x-meta-data": '{"locationVersion":"V2"}'
         }
         
-        # Add x-lineage-id ONLY for Search, Detail, and Booking APIs
-        # These are POST endpoints that require lineage tracking
-        search_booking_endpoints = [
-            "/search",
-            "/search-by-location",
-            "/detail",
-            "/provisional-book",
-            "/book"
-        ]
+        # Add x-lineage-id for Search, Detail, and Booking APIs (POST only)
+        # Check if path contains any of these endpoint patterns
+        needs_lineage = (
+            "search" in path.lower() or 
+            "detail" in path.lower() or 
+            "provisional-book" in path.lower() or 
+            "book" in path.lower()
+        )
         
-        # Check if current path needs x-lineage-id
-        if request.method == "POST" and any(endpoint in path for endpoint in search_booking_endpoints):
+        if request.method == "POST" and needs_lineage:
             headers["x-lineage-id"] = str(uuid.uuid4())
-            logger.info(f"Added x-lineage-id for search/booking endpoint")
+            logger.info(f"✅ Added x-lineage-id for endpoint: {path}")
         
         # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
@@ -82,7 +80,7 @@ async def relay(path: str, request: Request):
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
         if body:
-            logger.info(f"Body: {body}")
+            logger.info(f"Body: {str(body)[:200]}")  # First 200 chars of body
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.request(
