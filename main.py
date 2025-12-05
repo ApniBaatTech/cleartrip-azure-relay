@@ -19,19 +19,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Keep your existing B2B URL
 CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://b2b.cleartrip.com")
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
-
-# Add SaaS API URL
 CLEARTRIP_SAAS_URL = "https://saasapi.cleartrip.com"
 
 @app.get("/")
 async def root():
     return {
-        "service": "Cleartrip Relay", 
-        "status": "running", 
-        "version": "1.0.7",  # ✅ Updated version
+        "service": "Cleartrip Relay",
+        "status": "running",
+        "version": "1.0.8",
         "apis_supported": ["B2B V4", "SaaS"]
     }
 
@@ -44,9 +41,61 @@ async def health():
         "api_key_configured": bool(CLEARTRIP_API_KEY)
     }
 
+# ✅ IMPORTANT: Put SaaS endpoint BEFORE the wildcard route
+@app.post("/api/cleartrip-saas/hotel/search")
+async def saas_hotel_search(request: Request):
+    """SaaS API - Search hotels by city name"""
+    try:
+        body = await request.json()
+        
+        logger.info(f"🔍 === SAAS API REQUEST ===")
+        logger.info(f"City: {body.get('city')}")
+        logger.info(f"Body: {body}")
+        
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json"
+        }
+        
+        full_url = f"{CLEARTRIP_SAAS_URL}/hotel/search"
+        
+        logger.info(f"Calling SaaS API: {full_url}")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                url=full_url,
+                json=body,
+                headers=headers
+            )
+            
+            logger.info(f"📡 === SAAS API RESPONSE ===")
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Body: {response.text[:1000]}")
+            
+            try:
+                response_data = response.json()
+                return JSONResponse(
+                    content=response_data,
+                    status_code=response.status_code
+                )
+            except:
+                return JSONResponse(
+                    content={
+                        "error": "Non-JSON response from SaaS API",
+                        "response_text": response.text[:2000]
+                    },
+                    status_code=500
+                )
+                
+    except Exception as e:
+        logger.error(f"❌ SaaS API Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Wildcard route comes AFTER specific routes
 @app.api_route("/api/cleartrip/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def relay(path: str, request: Request):
-    """Generic relay for Cleartrip B2B V4 APIs (EXISTING - WORKS!)"""
+    """Generic relay for Cleartrip B2B V4 APIs"""
     try:
         body = None
         if request.method in ["POST", "PUT"]:
@@ -81,7 +130,7 @@ async def relay(path: str, request: Request):
         
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
-        logger.info(f"🔍 === REQUEST ===")
+        logger.info(f"🔍 === B2B API REQUEST ===")
         logger.info(f"Method: {request.method}")
         logger.info(f"URL: {full_url}")
         logger.info(f"Headers: {headers}")
@@ -98,7 +147,7 @@ async def relay(path: str, request: Request):
                 headers=headers
             )
             
-            logger.info(f"📡 === RESPONSE ===")
+            logger.info(f"📡 === B2B API RESPONSE ===")
             logger.info(f"Status: {response.status_code}")
             logger.info(f"Headers: {dict(response.headers)}")
             logger.info(f"Body: {response.text[:1000]}")
