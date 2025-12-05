@@ -19,24 +19,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://api.cleartrip.com")
+# Both base URLs from documentation
+CLEARTRIP_API_URL = "https://api.cleartrip.com"
+CLEARTRIP_B2B_URL = "https://b2b.cleartrip.com"
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.5"}
+    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.6"}
 
 @app.get("/health")
 async def health():
     return {
         "status": "healthy",
-        "cleartrip_url": CLEARTRIP_BASE_URL,
+        "api_url": CLEARTRIP_API_URL,
+        "b2b_url": CLEARTRIP_B2B_URL,
         "api_key_configured": bool(CLEARTRIP_API_KEY)
     }
 
 @app.api_route("/api/cleartrip/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def relay(path: str, request: Request):
-    """Generic relay for Cleartrip endpoints with proper headers"""
+    """Generic relay for Cleartrip endpoints with proper headers and URL routing"""
     try:
         # Get request body for POST/PUT
         body = None
@@ -59,11 +62,17 @@ async def relay(path: str, request: Request):
             "x-request-id": request_id,
         }
         
-        # Content APIs need x-meta-data header
-        # This includes: /content/locations, /content/location/hotels, /content/hotel-profile, etc.
+        # Determine which base URL to use
+        # Content APIs use api.cleartrip.com
+        # Other APIs use b2b.cleartrip.com
         if "content" in path.lower():
+            base_url = CLEARTRIP_API_URL
             headers["x-meta-data"] = '{"locationVersion":"V2"}'
-            logger.info(f"✅ Added x-meta-data for content API")
+            logger.info(f"✅ Using api.cleartrip.com for Content API")
+            logger.info(f"✅ Added x-meta-data header")
+        else:
+            base_url = CLEARTRIP_B2B_URL
+            logger.info(f"✅ Using b2b.cleartrip.com")
         
         # Search, Detail, and Booking APIs need x-lineage-id
         needs_lineage = (
@@ -77,12 +86,13 @@ async def relay(path: str, request: Request):
             headers["x-lineage-id"] = str(uuid.uuid4())
             logger.info(f"✅ Added x-lineage-id")
         
-        # Build full URL
-        full_url = f"{CLEARTRIP_BASE_URL}/{path}"
+        # Build full URL with correct base
+        full_url = f"{base_url}/{path}"
         
         logger.info(f"🔍 === REQUEST ===")
         logger.info(f"Method: {request.method}")
-        logger.info(f"URL: {full_url}")
+        logger.info(f"Base URL: {base_url}")
+        logger.info(f"Full URL: {full_url}")
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
         if body:
