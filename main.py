@@ -19,26 +19,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://api.cleartrip.com")
+# Keep your existing B2B URL
+CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://b2b.cleartrip.com")
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
+
+# Add SaaS API URL
+CLEARTRIP_SAAS_URL = "https://saasapi.cleartrip.com"
 
 @app.get("/")
 async def root():
-    return {"service": "Cleartrip Relay", "status": "running", "version": "1.0.5"}
+    return {
+        "service": "Cleartrip Relay", 
+        "status": "running", 
+        "version": "1.0.7",  # ✅ Updated version
+        "apis_supported": ["B2B V4", "SaaS"]
+    }
 
 @app.get("/health")
 async def health():
     return {
         "status": "healthy",
-        "cleartrip_url": CLEARTRIP_BASE_URL,
+        "b2b_url": CLEARTRIP_BASE_URL,
+        "saas_url": CLEARTRIP_SAAS_URL,
         "api_key_configured": bool(CLEARTRIP_API_KEY)
     }
 
 @app.api_route("/api/cleartrip/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def relay(path: str, request: Request):
-    """Generic relay for Cleartrip endpoints with proper headers"""
+    """Generic relay for Cleartrip B2B V4 APIs (EXISTING - WORKS!)"""
     try:
-        # Get request body for POST/PUT
         body = None
         if request.method in ["POST", "PUT"]:
             try:
@@ -46,26 +55,19 @@ async def relay(path: str, request: Request):
             except:
                 pass
         
-        # Get query parameters
         params = dict(request.query_params)
-        
-        # Generate unique request ID
         request_id = str(uuid.uuid4())
         
-        # Base headers for ALL Cleartrip APIs
         headers = {
             "Content-Type": "application/json",
             "x-ct-api-key": CLEARTRIP_API_KEY,
             "x-request-id": request_id,
         }
         
-        # Content APIs need x-meta-data header
-        # This includes: /content/locations, /content/location/hotels, /content/hotel-profile, etc.
         if "content" in path.lower():
             headers["x-meta-data"] = '{"locationVersion":"V2"}'
             logger.info(f"✅ Added x-meta-data for content API")
         
-        # Search, Detail, and Booking APIs need x-lineage-id
         needs_lineage = (
             "search" in path.lower() or 
             "detail" in path.lower() or 
@@ -77,7 +79,6 @@ async def relay(path: str, request: Request):
             headers["x-lineage-id"] = str(uuid.uuid4())
             logger.info(f"✅ Added x-lineage-id")
         
-        # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
         logger.info(f"🔍 === REQUEST ===")
@@ -88,7 +89,6 @@ async def relay(path: str, request: Request):
         if body:
             logger.info(f"Body: {str(body)[:500]}")
         
-        # Make request to Cleartrip
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.request(
                 method=request.method,
@@ -103,7 +103,6 @@ async def relay(path: str, request: Request):
             logger.info(f"Headers: {dict(response.headers)}")
             logger.info(f"Body: {response.text[:1000]}")
             
-            # Try to parse as JSON
             try:
                 response_data = response.json()
                 return JSONResponse(
@@ -111,7 +110,6 @@ async def relay(path: str, request: Request):
                     status_code=response.status_code
                 )
             except:
-                # Return text response if not JSON
                 return JSONResponse(
                     content={
                         "error": "Non-JSON response",
