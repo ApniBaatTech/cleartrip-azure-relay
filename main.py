@@ -27,28 +27,8 @@ async def root():
     return {
         "service": "Cleartrip Relay",
         "status": "running",
-        "version": "2.0.0",
-        "apis_supported": ["B2B V4 - All Endpoints"],
-        "endpoints": {
-            "content": [
-                "/locations",
-                "/location/hotels", 
-                "/hotel-profile",
-                "/incremental-updates"
-            ],
-            "search": [
-                "/search",
-                "/search-by-location"
-            ],
-            "booking": [
-                "/detail",
-                "/provisional-book",
-                "/book",
-                "/trip",
-                "/cancel",
-                "/refund-info"
-            ]
-        }
+        "version": "2.0.1",
+        "apis_supported": ["B2B V4"]
     }
 
 @app.get("/health")
@@ -72,20 +52,18 @@ def get_required_headers(path: str, method: str) -> dict:
     
     path_lower = path.lower()
     
-    # 1. x-meta-data header (ONLY for specific Content API endpoints)
-    # Required for: /location/hotels (get hotel list by location)
-    # NOT required for: /locations (get location list)
+    # 1. x-meta-data header (ONLY for /location/hotels endpoint)
     if "location/hotels" in path_lower:
         headers["x-meta-data"] = '{"locationVersion":"V2"}'
         logger.info(f"✅ Added x-meta-data for hotel list endpoint")
     
     # 2. x-lineage-id header (Required for Search, Details, and Booking endpoints)
     needs_lineage = any([
-        "search" in path_lower and "location" not in path_lower,  # /search endpoint
+        path_lower.endswith("/search") or "/search?" in path_lower,  # /search endpoint
         "search-by-location" in path_lower,  # /search-by-location endpoint
         "/detail" in path_lower,  # /detail endpoint
         "provisional-book" in path_lower,  # /provisional-book endpoint
-        "/book" in path_lower and "provisional" not in path_lower,  # /book endpoint
+        path_lower.endswith("/book") or "/book?" in path_lower,  # /book endpoint only
     ])
     
     if needs_lineage:
@@ -174,108 +152,6 @@ async def relay(path: str, request: Request):
     except Exception as e:
         logger.error(f"❌ Unexpected Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-
-# Health check with detailed status
-@app.get("/api/status")
-async def detailed_status():
-    """Detailed status endpoint for debugging"""
-    return {
-        "service": "Cleartrip B2B V4 Relay",
-        "status": "operational",
-        "version": "2.0.0",
-        "configuration": {
-            "base_url": CLEARTRIP_BASE_URL,
-            "api_key_present": bool(CLEARTRIP_API_KEY),
-            "api_key_prefix": CLEARTRIP_API_KEY[:8] + "..." if CLEARTRIP_API_KEY else None,
-        },
-        "supported_endpoints": {
-            "content_apis": {
-                "get_locations": {
-                    "path": "/hotels/api/v4/content/locations",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "get_hotel_list": {
-                    "path": "/hotels/api/v4/content/location/hotels",
-                    "method": "GET",
-                    "requires_x_meta_data": True,
-                    "requires_x_lineage_id": False
-                },
-                "get_hotel_profile": {
-                    "path": "/hotels/api/v4/content/hotel-profile/{hotelId}",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "get_incremental_updates": {
-                    "path": "/hotels/api/v4/content/incremental-updates",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                }
-            },
-            "search_apis": {
-                "search_by_hotel_ids": {
-                    "path": "/hotels/api/v4/search",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "search_by_location": {
-                    "path": "/hotels/api/v4/search-by-location",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                }
-            },
-            "booking_apis": {
-                "get_details": {
-                    "path": "/hotels/api/v4/detail",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "provisional_book": {
-                    "path": "/hotels/api/v4/provisional-book",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "book": {
-                    "path": "/hotels/api/v4/book",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "get_trip": {
-                    "path": "/hotels/api/v4/trip",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "cancel": {
-                    "path": "/hotels/api/v4/cancel/{tripID}",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "refund_info": {
-                    "path": "/hotels/api/v4/refund-info/{tripID}",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                }
-            }
-        },
-        "notes": [
-            "All requests automatically include x-ct-api-key and x-request-id",
-            "x-meta-data is only added for /location/hotels endpoint",
-            "x-lineage-id is added for search, detail, and booking endpoints",
-            "Content APIs should be called during off-peak hours (1-8 AM IST)"
-        ]
-    }
 
 
 if __name__ == "__main__":
