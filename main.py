@@ -21,82 +21,88 @@ app.add_middleware(
 
 CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://b2b.cleartrip.com")
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
-CLEARTRIP_SAAS_URL = "https://saasapi.cleartrip.com"
 
 @app.get("/")
 async def root():
     return {
         "service": "Cleartrip Relay",
         "status": "running",
-        "version": "1.0.8",
-        "apis_supported": ["B2B V4", "SaaS"]
+        "version": "2.0.0",
+        "apis_supported": ["B2B V4 - All Endpoints"],
+        "endpoints": {
+            "content": [
+                "/locations",
+                "/location/hotels", 
+                "/hotel-profile",
+                "/incremental-updates"
+            ],
+            "search": [
+                "/search",
+                "/search-by-location"
+            ],
+            "booking": [
+                "/detail",
+                "/provisional-book",
+                "/book",
+                "/trip",
+                "/cancel",
+                "/refund-info"
+            ]
+        }
     }
 
 @app.get("/health")
 async def health():
     return {
         "status": "healthy",
-        "b2b_url": CLEARTRIP_BASE_URL,
-        "saas_url": CLEARTRIP_SAAS_URL,
+        "base_url": CLEARTRIP_BASE_URL,
         "api_key_configured": bool(CLEARTRIP_API_KEY)
     }
 
-# ✅ IMPORTANT: Put SaaS endpoint BEFORE the wildcard route
-@app.post("/api/cleartrip-saas/hotel/search")
-async def saas_hotel_search(request: Request):
-    """SaaS API - Search hotels by city name"""
-    try:
-        body = await request.json()
-        
-        logger.info(f"🔍 === SAAS API REQUEST ===")
-        logger.info(f"City: {body.get('city')}")
-        logger.info(f"Body: {body}")
-        
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json"
-        }
-        
-        full_url = f"{CLEARTRIP_SAAS_URL}/hotel/search"
-        
-        logger.info(f"Calling SaaS API: {full_url}")
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url=full_url,
-                json=body,
-                headers=headers
-            )
-            
-            logger.info(f"📡 === SAAS API RESPONSE ===")
-            logger.info(f"Status: {response.status_code}")
-            logger.info(f"Body: {response.text[:1000]}")
-            
-            try:
-                response_data = response.json()
-                return JSONResponse(
-                    content=response_data,
-                    status_code=response.status_code
-                )
-            except:
-                return JSONResponse(
-                    content={
-                        "error": "Non-JSON response from SaaS API",
-                        "response_text": response.text[:2000]
-                    },
-                    status_code=500
-                )
-                
-    except Exception as e:
-        logger.error(f"❌ SaaS API Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+def get_required_headers(path: str, method: str) -> dict:
+    """
+    Intelligently determine which headers are required for each endpoint
+    based on Cleartrip B2B V4 API documentation
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "x-ct-api-key": CLEARTRIP_API_KEY,
+        "x-request-id": str(uuid.uuid4()),
+    }
+    
+    path_lower = path.lower()
+    
+    # 1. x-meta-data header (ONLY for specific Content API endpoints)
+    # Required for: /location/hotels (get hotel list by location)
+    # NOT required for: /locations (get location list)
+    if "location/hotels" in path_lower:
+        headers["x-meta-data"] = '{"locationVersion":"V2"}'
+        logger.info(f"✅ Added x-meta-data for hotel list endpoint")
+    
+    # 2. x-lineage-id header (Required for Search, Details, and Booking endpoints)
+    needs_lineage = any([
+        "search" in path_lower and "location" not in path_lower,  # /search endpoint
+        "search-by-location" in path_lower,  # /search-by-location endpoint
+        "/detail" in path_lower,  # /detail endpoint
+        "provisional-book" in path_lower,  # /provisional-book endpoint
+        "/book" in path_lower and "provisional" not in path_lower,  # /book endpoint
+    ])
+    
+    if needs_lineage:
+        headers["x-lineage-id"] = str(uuid.uuid4())
+        logger.info(f"✅ Added x-lineage-id for search/booking endpoint")
+    
+    return headers
 
 
-# ✅ Wildcard route comes AFTER specific routes
 @app.api_route("/api/cleartrip/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def relay(path: str, request: Request):
-    """Generic relay for Cleartrip B2B V4 APIs"""
+    """
+    Universal relay for all Cleartrip B2B V4 APIs
+    Automatically adds correct headers based on endpoint
+    """
     try:
+        # Parse request body for POST/PUT
         body = None
         if request.method in ["POST", "PUT"]:
             try:
@@ -104,40 +110,26 @@ async def relay(path: str, request: Request):
             except:
                 pass
         
+        # Get query parameters
         params = dict(request.query_params)
-        request_id = str(uuid.uuid4())
         
-        headers = {
-            "Content-Type": "application/json",
-            "x-ct-api-key": CLEARTRIP_API_KEY,
-            "x-request-id": request_id,
-        }
+        # Get required headers for this specific endpoint
+        headers = get_required_headers(path, request.method)
         
-        if "content" in path.lower():
-            headers["x-meta-data"] = '{"locationVersion":"V2"}'
-            logger.info(f"✅ Added x-meta-data for content API")
-        
-        needs_lineage = (
-            "search" in path.lower() or 
-            "detail" in path.lower() or 
-            "provisional-book" in path.lower() or 
-            "book" in path.lower()
-        )
-        
-        if needs_lineage:
-            headers["x-lineage-id"] = str(uuid.uuid4())
-            logger.info(f"✅ Added x-lineage-id")
-        
+        # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
-        logger.info(f"🔍 === B2B API REQUEST ===")
+        # Log request details
+        logger.info(f"🔍 === CLEARTRIP API REQUEST ===")
         logger.info(f"Method: {request.method}")
+        logger.info(f"Endpoint: /{path}")
         logger.info(f"URL: {full_url}")
         logger.info(f"Headers: {headers}")
         logger.info(f"Params: {params}")
         if body:
             logger.info(f"Body: {str(body)[:500]}")
         
+        # Make request to Cleartrip
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.request(
                 method=request.method,
@@ -147,11 +139,13 @@ async def relay(path: str, request: Request):
                 headers=headers
             )
             
-            logger.info(f"📡 === B2B API RESPONSE ===")
+            # Log response
+            logger.info(f"📡 === CLEARTRIP API RESPONSE ===")
             logger.info(f"Status: {response.status_code}")
-            logger.info(f"Headers: {dict(response.headers)}")
-            logger.info(f"Body: {response.text[:1000]}")
+            logger.info(f"Response Headers: {dict(response.headers)}")
+            logger.info(f"Body Preview: {response.text[:500]}")
             
+            # Return response
             try:
                 response_data = response.json()
                 return JSONResponse(
@@ -159,9 +153,10 @@ async def relay(path: str, request: Request):
                     status_code=response.status_code
                 )
             except:
+                # Handle non-JSON responses
                 return JSONResponse(
                     content={
-                        "error": "Non-JSON response",
+                        "error": "Non-JSON response from Cleartrip",
                         "status_code": response.status_code,
                         "response_text": response.text[:2000]
                     },
@@ -171,9 +166,118 @@ async def relay(path: str, request: Request):
     except httpx.TimeoutException as e:
         logger.error(f"⏱️ Timeout Error: {str(e)}")
         raise HTTPException(status_code=504, detail="Request to Cleartrip timed out")
+    
     except httpx.HTTPError as e:
         logger.error(f"❌ HTTP Error: {str(e)}")
         raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
+    
     except Exception as e:
         logger.error(f"❌ Unexpected Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+# Health check with detailed status
+@app.get("/api/status")
+async def detailed_status():
+    """Detailed status endpoint for debugging"""
+    return {
+        "service": "Cleartrip B2B V4 Relay",
+        "status": "operational",
+        "version": "2.0.0",
+        "configuration": {
+            "base_url": CLEARTRIP_BASE_URL,
+            "api_key_present": bool(CLEARTRIP_API_KEY),
+            "api_key_prefix": CLEARTRIP_API_KEY[:8] + "..." if CLEARTRIP_API_KEY else None,
+        },
+        "supported_endpoints": {
+            "content_apis": {
+                "get_locations": {
+                    "path": "/hotels/api/v4/content/locations",
+                    "method": "GET",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                },
+                "get_hotel_list": {
+                    "path": "/hotels/api/v4/content/location/hotels",
+                    "method": "GET",
+                    "requires_x_meta_data": True,
+                    "requires_x_lineage_id": False
+                },
+                "get_hotel_profile": {
+                    "path": "/hotels/api/v4/content/hotel-profile/{hotelId}",
+                    "method": "GET",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                },
+                "get_incremental_updates": {
+                    "path": "/hotels/api/v4/content/incremental-updates",
+                    "method": "GET",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                }
+            },
+            "search_apis": {
+                "search_by_hotel_ids": {
+                    "path": "/hotels/api/v4/search",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": True
+                },
+                "search_by_location": {
+                    "path": "/hotels/api/v4/search-by-location",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": True
+                }
+            },
+            "booking_apis": {
+                "get_details": {
+                    "path": "/hotels/api/v4/detail",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": True
+                },
+                "provisional_book": {
+                    "path": "/hotels/api/v4/provisional-book",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": True
+                },
+                "book": {
+                    "path": "/hotels/api/v4/book",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": True
+                },
+                "get_trip": {
+                    "path": "/hotels/api/v4/trip",
+                    "method": "GET",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                },
+                "cancel": {
+                    "path": "/hotels/api/v4/cancel/{tripID}",
+                    "method": "POST",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                },
+                "refund_info": {
+                    "path": "/hotels/api/v4/refund-info/{tripID}",
+                    "method": "GET",
+                    "requires_x_meta_data": False,
+                    "requires_x_lineage_id": False
+                }
+            }
+        },
+        "notes": [
+            "All requests automatically include x-ct-api-key and x-request-id",
+            "x-meta-data is only added for /location/hotels endpoint",
+            "x-lineage-id is added for search, detail, and booking endpoints",
+            "Content APIs should be called during off-peak hours (1-8 AM IST)"
+        ]
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
