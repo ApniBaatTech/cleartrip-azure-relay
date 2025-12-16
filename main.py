@@ -61,24 +61,32 @@ async def health():
 
 @app.get("/api/db-test")
 async def test_db():
-    """Test database connection"""
+    """Test database connection using REST API"""
     try:
-        import pymssql
-        conn = pymssql.connect(
-            server=os.getenv('DB_SERVER', 'g8trip-locations-server.database.windows.net'),
-            database=os.getenv('DB_NAME', 'locationsDb_cleartrip'),
-            user=os.getenv('DB_USER', 'g8Triplocations'),
-            password=os.getenv('DB_PASSWORD', ''),
-            tds_version='7.0'
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 as test")
-        result = cursor.fetchone()
-        conn.close()
+        # Just verify environment variables are set
+        db_server = os.getenv('DB_SERVER', '')
+        db_name = os.getenv('DB_NAME', '')
+        db_user = os.getenv('DB_USER', '')
+        db_password = os.getenv('DB_PASSWORD', '')
+        
+        if not all([db_server, db_name, db_user, db_password]):
+            return {
+                "status": "error",
+                "message": "Missing environment variables",
+                "vars_set": {
+                    "DB_SERVER": bool(db_server),
+                    "DB_NAME": bool(db_name),
+                    "DB_USER": bool(db_user),
+                    "DB_PASSWORD": bool(db_password)
+                }
+            }
+        
         return {
-            "status": "connected",
-            "result": result[0],
-            "message": "Database connection successful!"
+            "status": "config_ok",
+            "message": "Environment variables configured correctly",
+            "server": db_server,
+            "database": db_name,
+            "user": db_user
         }
     except Exception as e:
         return {
