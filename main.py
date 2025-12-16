@@ -63,15 +63,13 @@ async def health():
 async def test_db():
     """Test database connection"""
     try:
-        import pyodbc
-        conn = pyodbc.connect(
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-            f"SERVER={os.getenv('DB_SERVER', 'g8trip-locations-server.database.windows.net')};"
-            f"DATABASE={os.getenv('DB_NAME', 'locationsDb_cleartrip')};"
-            f"UID={os.getenv('DB_USER', 'g8Triplocations')};"
-            f"PWD={os.getenv('DB_PASSWORD', '')};"
-            f"Encrypt=yes;"
-            f"TrustServerCertificate=no;"
+        import pymssql
+        conn = pymssql.connect(
+            server=os.getenv('DB_SERVER', 'g8trip-locations-server.database.windows.net'),
+            database=os.getenv('DB_NAME', 'locationsDb_cleartrip'),
+            user=os.getenv('DB_USER', 'g8Triplocations'),
+            password=os.getenv('DB_PASSWORD', ''),
+            tds_version='7.0'
         )
         cursor = conn.cursor()
         cursor.execute("SELECT 1 as test")
