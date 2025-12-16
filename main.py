@@ -71,7 +71,9 @@ async def test_db():
             user=os.getenv('DB_USER', 'g8Triplocations'),
             password=os.getenv('DB_PASSWORD', ''),
             port=1433,
-            as_dict=True
+            as_dict=True,
+            cafile='/etc/ssl/certs/ca-certificates.crt',
+            validate_host=False
         )
         
         cursor = conn.cursor()
