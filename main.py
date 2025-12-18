@@ -132,12 +132,12 @@ async def autocomplete_locations(q: str = "", limit: int = 10):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # FIX: Pass parameters as tuple, use LIKE pattern correctly
+        # FIX: pytds doesn't like TOP(?) - use string formatting for TOP, parameterize the search
         search_pattern = f"{q}%"
-        cursor.execute("""
-            SELECT TOP(?) id, name, type, parent_id, latitude, longitude
+        query = f"""
+            SELECT TOP({limit}) id, name, type, parent_id, latitude, longitude
             FROM locations 
-            WHERE name LIKE ? AND search_enabled = 1
+            WHERE name LIKE %s AND search_enabled = 1
             ORDER BY 
                 CASE type 
                     WHEN 'CITY' THEN 1 
@@ -146,7 +146,9 @@ async def autocomplete_locations(q: str = "", limit: int = 10):
                     WHEN 'COUNTRY' THEN 4 
                 END,
                 name
-        """, (limit, search_pattern))  # ✅ Pass as tuple with pre-formatted pattern
+        """
+        
+        cursor.execute(query, (search_pattern,))
         
         results = cursor.fetchall()
         conn.close()
@@ -181,30 +183,30 @@ async def get_all_locations(limit: int = 100, offset: int = 0, type: str = None)
         
         # Build query based on type filter
         if type:
-            # FIX: Ensure all parameters are in tuple
-            cursor.execute("""
+            query = f"""
                 SELECT id, name, type, parent_id, latitude, longitude, search_enabled
                 FROM locations 
-                WHERE type = ?
+                WHERE type = %s
                 ORDER BY name
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-            """, (type, offset, limit))  # ✅ All three params in tuple
+                OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY
+            """
+            cursor.execute(query, (type,))
         else:
-            # FIX: Pass offset and limit as tuple
-            cursor.execute("""
+            query = f"""
                 SELECT id, name, type, parent_id, latitude, longitude, search_enabled
                 FROM locations 
                 ORDER BY type, name
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-            """, (offset, limit))  # ✅ Both params in tuple
+                OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY
+            """
+            cursor.execute(query)
         
         results = cursor.fetchall()
         
         # Get total count
         if type:
-            cursor.execute("SELECT COUNT(*) as total FROM locations WHERE type = ?", (type,))  # ✅ Single value still needs tuple
+            cursor.execute("SELECT COUNT(*) as total FROM locations WHERE type = %s", (type,))
         else:
-            cursor.execute("SELECT COUNT(*) as total FROM locations")  # ✅ No params needed
+            cursor.execute("SELECT COUNT(*) as total FROM locations")
         
         total = cursor.fetchone()['total']
         conn.close()
@@ -237,12 +239,12 @@ async def get_location_by_id(location_id: int):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get the location - FIX: Single param still needs tuple
+        # Get the location
         cursor.execute("""
             SELECT id, name, type, parent_id, latitude, longitude, search_enabled
             FROM locations 
-            WHERE id = ?
-        """, (location_id,))  # ✅ Tuple with single value
+            WHERE id = %s
+        """, (location_id,))
         
         location = cursor.fetchone()
         
@@ -261,8 +263,8 @@ async def get_location_by_id(location_id: int):
             cursor.execute("""
                 SELECT id, name, type, parent_id
                 FROM locations 
-                WHERE id = ?
-            """, (parent_id,))  # ✅ Tuple with single value
+                WHERE id = %s
+            """, (parent_id,))
             
             parent = cursor.fetchone()
             if parent:
@@ -285,7 +287,6 @@ async def get_location_by_id(location_id: int):
             "status": "error",
             "message": str(e)
         }
-
 
 # ============== CLEARTRIP RELAY ==============
 
