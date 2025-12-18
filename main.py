@@ -5,6 +5,7 @@ import httpx
 import os
 import uuid
 import logging
+import pytds
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,13 +23,32 @@ app.add_middleware(
 CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://b2b.cleartrip.com")
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
+
+# ============== DATABASE HELPER ==============
+
+def get_db_connection():
+    """Create database connection"""
+    return pytds.connect(
+        dsn=os.getenv('DB_SERVER', 'g8trip-locations-server.database.windows.net'),
+        database=os.getenv('DB_NAME', 'locationsDb_cleartrip'),
+        user=os.getenv('DB_USER', 'g8Triplocations'),
+        password=os.getenv('DB_PASSWORD', ''),
+        port=1433,
+        as_dict=True,
+        cafile='/etc/ssl/certs/ca-certificates.crt',
+        validate_host=False
+    )
+
+
+# ============== ROOT & HEALTH ENDPOINTS ==============
+
 @app.get("/")
 async def root():
     return {
         "service": "Cleartrip Relay",
         "status": "running",
-        "version": "2.0.0",
-        "apis_supported": ["B2B V4 - All Endpoints"],
+        "version": "2.1.0",
+        "apis_supported": ["B2B V4 - All Endpoints", "Locations DB"],
         "endpoints": {
             "content": [
                 "/locations",
@@ -47,9 +67,16 @@ async def root():
                 "/trip",
                 "/cancel",
                 "/refund-info"
+            ],
+            "database": [
+                "/api/db-test",
+                "/api/locations/autocomplete",
+                "/api/locations/all",
+                "/api/locations/{id}"
             ]
         }
     }
+
 
 @app.get("/health")
 async def health():
@@ -59,23 +86,12 @@ async def health():
         "api_key_configured": bool(CLEARTRIP_API_KEY)
     }
 
+
 @app.get("/api/db-test")
 async def test_db():
     """Test database connection"""
     try:
-        import pytds
-        
-        conn = pytds.connect(
-            dsn=os.getenv('DB_SERVER', 'g8trip-locations-server.database.windows.net'),
-            database=os.getenv('DB_NAME', 'locationsDb_cleartrip'),
-            user=os.getenv('DB_USER', 'g8Triplocations'),
-            password=os.getenv('DB_PASSWORD', ''),
-            port=1433,
-            as_dict=True,
-            cafile='/etc/ssl/certs/ca-certificates.crt',
-            validate_host=False
-        )
-        
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT 1 as test")
         result = cursor.fetchone()
@@ -92,6 +108,183 @@ async def test_db():
             "message": str(e)
         }
 
+
+# ============== LOCATIONS ENDPOINTS ==============
+
+@app.get("/api/locations/autocomplete")
+async def autocomplete_locations(q: str = "", limit: int = 10):
+    """
+    Search locations by name prefix for autocomplete
+    
+    Usage: /api/locations/autocomplete?q=kor&limit=10
+    """
+    try:
+        if len(q) < 2:
+            return {
+                "status": "error",
+                "message": "Query must be at least 2 characters",
+                "query": q,
+                "locations": []
+            }
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Search locations starting with the query string
+        # Order: CITY first, then LOCALITY, then STATE, then COUNTRY
+        cursor.execute("""
+            SELECT TOP(?) id, name, type, parent_id, latitude, longitude
+            FROM locations 
+            WHERE name LIKE ? AND search_enabled = 1
+            ORDER BY 
+                CASE type 
+                    WHEN 'CITY' THEN 1 
+                    WHEN 'LOCALITY' THEN 2 
+                    WHEN 'STATE' THEN 3 
+                    WHEN 'COUNTRY' THEN 4 
+                END,
+                name
+        """, (limit, f"{q}%"))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "query": q,
+            "count": len(results),
+            "locations": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Autocomplete error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "query": q,
+            "locations": []
+        }
+
+
+@app.get("/api/locations/all")
+async def get_all_locations(limit: int = 100, offset: int = 0, type: str = None):
+    """
+    Get all locations with pagination
+    
+    Usage: /api/locations/all?limit=100&offset=0&type=CITY
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build query based on type filter
+        if type:
+            cursor.execute("""
+                SELECT id, name, type, parent_id, latitude, longitude, search_enabled
+                FROM locations 
+                WHERE type = ?
+                ORDER BY name
+                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            """, (type, offset, limit))
+        else:
+            cursor.execute("""
+                SELECT id, name, type, parent_id, latitude, longitude, search_enabled
+                FROM locations 
+                ORDER BY type, name
+                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            """, (offset, limit))
+        
+        results = cursor.fetchall()
+        
+        # Get total count
+        if type:
+            cursor.execute("SELECT COUNT(*) as total FROM locations WHERE type = ?", (type,))
+        else:
+            cursor.execute("SELECT COUNT(*) as total FROM locations")
+        
+        total = cursor.fetchone()['total']
+        conn.close()
+        
+        return {
+            "status": "success",
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "type_filter": type,
+            "locations": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Get all locations error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/api/locations/{location_id}")
+async def get_location_by_id(location_id: int):
+    """
+    Get single location by ID with parent details
+    
+    Usage: /api/locations/432610
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get the location
+        cursor.execute("""
+            SELECT id, name, type, parent_id, latitude, longitude, search_enabled
+            FROM locations 
+            WHERE id = ?
+        """, (location_id,))
+        
+        location = cursor.fetchone()
+        
+        if not location:
+            conn.close()
+            return {
+                "status": "error",
+                "message": f"Location {location_id} not found"
+            }
+        
+        # Get parent hierarchy
+        hierarchy = []
+        parent_id = location['parent_id']
+        
+        while parent_id:
+            cursor.execute("""
+                SELECT id, name, type, parent_id
+                FROM locations 
+                WHERE id = ?
+            """, (parent_id,))
+            
+            parent = cursor.fetchone()
+            if parent:
+                hierarchy.append(parent)
+                parent_id = parent['parent_id']
+            else:
+                break
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "location": location,
+            "hierarchy": hierarchy
+        }
+        
+    except Exception as e:
+        logger.error(f"Get location error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+# ============== CLEARTRIP RELAY ==============
+
 def get_required_headers(path: str, method: str) -> dict:
     """
     Intelligently determine which headers are required for each endpoint
@@ -105,20 +298,16 @@ def get_required_headers(path: str, method: str) -> dict:
     
     path_lower = path.lower()
     
-    # 1. x-meta-data header (ONLY for specific Content API endpoints)
-    # Required for: /location/hotels (get hotel list by location)
-    # NOT required for: /locations (get location list)
     if "location/hotels" in path_lower:
         headers["x-meta-data"] = '{"locationVersion":"V2"}'
         logger.info(f"✅ Added x-meta-data for hotel list endpoint")
     
-    # 2. x-lineage-id header (Required for Search, Details, and Booking endpoints)
     needs_lineage = any([
-        "search" in path_lower and "location" not in path_lower,  # /search endpoint
-        "search-by-location" in path_lower,  # /search-by-location endpoint
-        "/detail" in path_lower,  # /detail endpoint
-        "provisional-book" in path_lower,  # /provisional-book endpoint
-        "/book" in path_lower and "provisional" not in path_lower,  # /book endpoint
+        "search" in path_lower and "location" not in path_lower,
+        "search-by-location" in path_lower,
+        "/detail" in path_lower,
+        "provisional-book" in path_lower,
+        "/book" in path_lower and "provisional" not in path_lower,
     ])
     
     if needs_lineage:
@@ -132,10 +321,8 @@ def get_required_headers(path: str, method: str) -> dict:
 async def relay(path: str, request: Request):
     """
     Universal relay for all Cleartrip B2B V4 APIs
-    Automatically adds correct headers based on endpoint
     """
     try:
-        # Parse request body for POST/PUT
         body = None
         if request.method in ["POST", "PUT"]:
             try:
@@ -143,26 +330,15 @@ async def relay(path: str, request: Request):
             except:
                 pass
         
-        # Get query parameters
         params = dict(request.query_params)
-        
-        # Get required headers for this specific endpoint
         headers = get_required_headers(path, request.method)
-        
-        # Build full URL
         full_url = f"{CLEARTRIP_BASE_URL}/{path}"
         
-        # Log request details
         logger.info(f"🔍 === CLEARTRIP API REQUEST ===")
         logger.info(f"Method: {request.method}")
         logger.info(f"Endpoint: /{path}")
         logger.info(f"URL: {full_url}")
-        logger.info(f"Headers: {headers}")
-        logger.info(f"Params: {params}")
-        if body:
-            logger.info(f"Body: {str(body)[:500]}")
         
-        # Make request to Cleartrip
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.request(
                 method=request.method,
@@ -172,13 +348,8 @@ async def relay(path: str, request: Request):
                 headers=headers
             )
             
-            # Log response
-            logger.info(f"📡 === CLEARTRIP API RESPONSE ===")
-            logger.info(f"Status: {response.status_code}")
-            logger.info(f"Response Headers: {dict(response.headers)}")
-            logger.info(f"Body Preview: {response.text[:500]}")
+            logger.info(f"📡 Response Status: {response.status_code}")
             
-            # Return response
             try:
                 response_data = response.json()
                 return JSONResponse(
@@ -186,7 +357,6 @@ async def relay(path: str, request: Request):
                     status_code=response.status_code
                 )
             except:
-                # Handle non-JSON responses
                 return JSONResponse(
                     content={
                         "error": "Non-JSON response from Cleartrip",
@@ -209,105 +379,18 @@ async def relay(path: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
-# Health check with detailed status
 @app.get("/api/status")
 async def detailed_status():
     """Detailed status endpoint for debugging"""
     return {
         "service": "Cleartrip B2B V4 Relay",
         "status": "operational",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "configuration": {
             "base_url": CLEARTRIP_BASE_URL,
             "api_key_present": bool(CLEARTRIP_API_KEY),
             "api_key_prefix": CLEARTRIP_API_KEY[:8] + "..." if CLEARTRIP_API_KEY else None,
-        },
-        "supported_endpoints": {
-            "content_apis": {
-                "get_locations": {
-                    "path": "/hotels/api/v4/content/locations",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "get_hotel_list": {
-                    "path": "/hotels/api/v4/content/location/hotels",
-                    "method": "GET",
-                    "requires_x_meta_data": True,
-                    "requires_x_lineage_id": False
-                },
-                "get_hotel_profile": {
-                    "path": "/hotels/api/v4/content/hotel-profile/{hotelId}",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "get_incremental_updates": {
-                    "path": "/hotels/api/v4/content/incremental-updates",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                }
-            },
-            "search_apis": {
-                "search_by_hotel_ids": {
-                    "path": "/hotels/api/v4/search",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "search_by_location": {
-                    "path": "/hotels/api/v4/search-by-location",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                }
-            },
-            "booking_apis": {
-                "get_details": {
-                    "path": "/hotels/api/v4/detail",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "provisional_book": {
-                    "path": "/hotels/api/v4/provisional-book",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "book": {
-                    "path": "/hotels/api/v4/book",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": True
-                },
-                "get_trip": {
-                    "path": "/hotels/api/v4/trip",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "cancel": {
-                    "path": "/hotels/api/v4/cancel/{tripID}",
-                    "method": "POST",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                },
-                "refund_info": {
-                    "path": "/hotels/api/v4/refund-info/{tripID}",
-                    "method": "GET",
-                    "requires_x_meta_data": False,
-                    "requires_x_lineage_id": False
-                }
-            }
-        },
-        "notes": [
-            "All requests automatically include x-ct-api-key and x-request-id",
-            "x-meta-data is only added for /location/hotels endpoint",
-            "x-lineage-id is added for search, detail, and booking endpoints",
-            "Content APIs should be called during off-peak hours (1-8 AM IST)"
-        ]
+        }
     }
 
 
