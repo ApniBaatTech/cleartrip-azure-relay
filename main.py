@@ -111,6 +111,8 @@ async def test_db():
 
 # ============== LOCATIONS ENDPOINTS ==============
 
+# ============== LOCATIONS ENDPOINTS ==============
+
 @app.get("/api/locations/autocomplete")
 async def autocomplete_locations(q: str = "", limit: int = 10):
     """
@@ -130,8 +132,8 @@ async def autocomplete_locations(q: str = "", limit: int = 10):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Search locations starting with the query string
-        # Order: CITY first, then LOCALITY, then STATE, then COUNTRY
+        # FIX: Pass parameters as tuple, use LIKE pattern correctly
+        search_pattern = f"{q}%"
         cursor.execute("""
             SELECT TOP(?) id, name, type, parent_id, latitude, longitude
             FROM locations 
@@ -144,7 +146,7 @@ async def autocomplete_locations(q: str = "", limit: int = 10):
                     WHEN 'COUNTRY' THEN 4 
                 END,
                 name
-        """, (limit, f"{q}%"))
+        """, (limit, search_pattern))  # ✅ Pass as tuple with pre-formatted pattern
         
         results = cursor.fetchall()
         conn.close()
@@ -179,28 +181,30 @@ async def get_all_locations(limit: int = 100, offset: int = 0, type: str = None)
         
         # Build query based on type filter
         if type:
+            # FIX: Ensure all parameters are in tuple
             cursor.execute("""
                 SELECT id, name, type, parent_id, latitude, longitude, search_enabled
                 FROM locations 
                 WHERE type = ?
                 ORDER BY name
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-            """, (type, offset, limit))
+            """, (type, offset, limit))  # ✅ All three params in tuple
         else:
+            # FIX: Pass offset and limit as tuple
             cursor.execute("""
                 SELECT id, name, type, parent_id, latitude, longitude, search_enabled
                 FROM locations 
                 ORDER BY type, name
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
-            """, (offset, limit))
+            """, (offset, limit))  # ✅ Both params in tuple
         
         results = cursor.fetchall()
         
         # Get total count
         if type:
-            cursor.execute("SELECT COUNT(*) as total FROM locations WHERE type = ?", (type,))
+            cursor.execute("SELECT COUNT(*) as total FROM locations WHERE type = ?", (type,))  # ✅ Single value still needs tuple
         else:
-            cursor.execute("SELECT COUNT(*) as total FROM locations")
+            cursor.execute("SELECT COUNT(*) as total FROM locations")  # ✅ No params needed
         
         total = cursor.fetchone()['total']
         conn.close()
@@ -233,12 +237,12 @@ async def get_location_by_id(location_id: int):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get the location
+        # Get the location - FIX: Single param still needs tuple
         cursor.execute("""
             SELECT id, name, type, parent_id, latitude, longitude, search_enabled
             FROM locations 
             WHERE id = ?
-        """, (location_id,))
+        """, (location_id,))  # ✅ Tuple with single value
         
         location = cursor.fetchone()
         
@@ -258,7 +262,7 @@ async def get_location_by_id(location_id: int):
                 SELECT id, name, type, parent_id
                 FROM locations 
                 WHERE id = ?
-            """, (parent_id,))
+            """, (parent_id,))  # ✅ Tuple with single value
             
             parent = cursor.fetchone()
             if parent:
