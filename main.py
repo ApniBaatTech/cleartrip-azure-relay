@@ -287,6 +287,73 @@ async def get_location_by_id(location_id: int):
             "message": str(e)
         }
 
+# ============== HOTELS ENDPOINTS ==============
+
+@app.get("/api/hotels/search")
+async def search_hotels(q: str = "", location_id: int = None, min_rating: float = None, limit: int = 20):
+    """
+    Search hotels by name or filter by location/rating
+    
+    Usage: 
+    - /api/hotels/search?q=europe
+    - /api/hotels/search?location_id=34849&min_rating=3
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build dynamic query
+        conditions = []
+        params = []
+        
+        if q and len(q) >= 2:
+            conditions.append("h.name LIKE %s")
+            params.append(f"%{q}%")
+        
+        if location_id:
+            conditions.append("h.location_id = %s")
+            params.append(location_id)
+        
+        if min_rating:
+            conditions.append("h.star_rating >= %s")
+            params.append(min_rating)
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        query = f"""
+            SELECT TOP({limit}) h.id, h.name, h.star_rating, h.property_type, 
+                   h.address, h.latitude, h.longitude, h.images,
+                   l.name as city_name
+            FROM hotels h
+            JOIN locations l ON h.location_id = l.id
+            WHERE {where_clause}
+            ORDER BY h.star_rating DESC, h.name
+        """
+        
+        cursor.execute(query, tuple(params))
+        hotels = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "query": q,
+            "filters": {
+                "location_id": location_id,
+                "min_rating": min_rating
+            },
+            "count": len(hotels),
+            "hotels": hotels
+        }
+        
+    except Exception as e:
+        logger.error(f"Search hotels error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
 @app.get("/api/hotels/by-location/{location_id}")
 async def get_hotels_by_location(location_id: int, limit: int = 50, offset: int = 0):
     """
@@ -401,72 +468,6 @@ async def get_hotel_by_id(hotel_id: int):
             "status": "error",
             "message": str(e)
         }
-
-
-@app.get("/api/hotels/search")
-async def search_hotels(q: str = "", location_id: int = None, min_rating: float = None, limit: int = 20):
-    """
-    Search hotels by name or filter by location/rating
-    
-    Usage: 
-    - /api/hotels/search?q=europe
-    - /api/hotels/search?location_id=34849&min_rating=3
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Build dynamic query
-        conditions = []
-        params = []
-        
-        if q and len(q) >= 2:
-            conditions.append("h.name LIKE %s")
-            params.append(f"%{q}%")
-        
-        if location_id:
-            conditions.append("h.location_id = %s")
-            params.append(location_id)
-        
-        if min_rating:
-            conditions.append("h.star_rating >= %s")
-            params.append(min_rating)
-        
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-        
-        query = f"""
-            SELECT TOP({limit}) h.id, h.name, h.star_rating, h.property_type, 
-                   h.address, h.latitude, h.longitude, h.images,
-                   l.name as city_name
-            FROM hotels h
-            JOIN locations l ON h.location_id = l.id
-            WHERE {where_clause}
-            ORDER BY h.star_rating DESC, h.name
-        """
-        
-        cursor.execute(query, tuple(params))
-        hotels = cursor.fetchall()
-        
-        conn.close()
-        
-        return {
-            "status": "success",
-            "query": q,
-            "filters": {
-                "location_id": location_id,
-                "min_rating": min_rating
-            },
-            "count": len(hotels),
-            "hotels": hotels
-        }
-        
-    except Exception as e:
-        logger.error(f"Search hotels error: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-        
 
 # ============== CLEARTRIP RELAY ==============
 
