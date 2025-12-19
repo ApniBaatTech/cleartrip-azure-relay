@@ -227,7 +227,6 @@ async def get_all_locations(limit: int = 100, offset: int = 0, type: str = None)
             "message": str(e)
         }
 
-
 @app.get("/api/locations/{location_id}")
 async def get_location_by_id(location_id: int):
     """
@@ -287,6 +286,187 @@ async def get_location_by_id(location_id: int):
             "status": "error",
             "message": str(e)
         }
+
+@app.get("/api/hotels/by-location/{location_id}")
+async def get_hotels_by_location(location_id: int, limit: int = 50, offset: int = 0):
+    """
+    Get all hotels for a specific location
+    
+    Usage: /api/hotels/by-location/34849?limit=50&offset=0
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # First, verify location exists and get its name
+        cursor.execute("""
+            SELECT id, name, type FROM locations WHERE id = %s
+        """, (location_id,))
+        
+        location = cursor.fetchone()
+        
+        if not location:
+            conn.close()
+            return {
+                "status": "error",
+                "message": f"Location {location_id} not found"
+            }
+        
+        # Get hotels for this location
+        query = f"""
+            SELECT id, name, star_rating, property_type, address, pincode,
+                   latitude, longitude, total_rooms, total_floors,
+                   check_in_time, check_out_time, images, amenities
+            FROM hotels 
+            WHERE location_id = %s
+            ORDER BY star_rating DESC, name
+            OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY
+        """
+        cursor.execute(query, (location_id,))
+        hotels = cursor.fetchall()
+        
+        # Get total count
+        cursor.execute("SELECT COUNT(*) as total FROM hotels WHERE location_id = %s", (location_id,))
+        total = cursor.fetchone()['total']
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "location": location,
+            "total_hotels": total,
+            "limit": limit,
+            "offset": offset,
+            "hotels": hotels
+        }
+        
+    except Exception as e:
+        logger.error(f"Get hotels by location error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/api/hotels/{hotel_id}")
+async def get_hotel_by_id(hotel_id: int):
+    """
+    Get single hotel with all details including rooms
+    
+    Usage: /api/hotels/1352788
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get hotel details
+        cursor.execute("""
+            SELECT h.*, l.name as city_name, l.type as city_type
+            FROM hotels h
+            JOIN locations l ON h.location_id = l.id
+            WHERE h.id = %s
+        """, (hotel_id,))
+        
+        hotel = cursor.fetchone()
+        
+        if not hotel:
+            conn.close()
+            return {
+                "status": "error",
+                "message": f"Hotel {hotel_id} not found"
+            }
+        
+        # Get rooms for this hotel
+        cursor.execute("""
+            SELECT id, name, area_value, area_unit, max_occupancy, 
+                   max_adults, max_children, amenities, images
+            FROM hotel_rooms 
+            WHERE hotel_id = %s
+            ORDER BY name
+        """, (hotel_id,))
+        
+        rooms = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "hotel": hotel,
+            "rooms": rooms
+        }
+        
+    except Exception as e:
+        logger.error(f"Get hotel error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/api/hotels/search")
+async def search_hotels(q: str = "", location_id: int = None, min_rating: float = None, limit: int = 20):
+    """
+    Search hotels by name or filter by location/rating
+    
+    Usage: 
+    - /api/hotels/search?q=europe
+    - /api/hotels/search?location_id=34849&min_rating=3
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build dynamic query
+        conditions = []
+        params = []
+        
+        if q and len(q) >= 2:
+            conditions.append("h.name LIKE %s")
+            params.append(f"%{q}%")
+        
+        if location_id:
+            conditions.append("h.location_id = %s")
+            params.append(location_id)
+        
+        if min_rating:
+            conditions.append("h.star_rating >= %s")
+            params.append(min_rating)
+        
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        
+        query = f"""
+            SELECT TOP({limit}) h.id, h.name, h.star_rating, h.property_type, 
+                   h.address, h.latitude, h.longitude, h.images,
+                   l.name as city_name
+            FROM hotels h
+            JOIN locations l ON h.location_id = l.id
+            WHERE {where_clause}
+            ORDER BY h.star_rating DESC, h.name
+        """
+        
+        cursor.execute(query, tuple(params))
+        hotels = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "query": q,
+            "filters": {
+                "location_id": location_id,
+                "min_rating": min_rating
+            },
+            "count": len(hotels),
+            "hotels": hotels
+        }
+        
+    except Exception as e:
+        logger.error(f"Search hotels error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+        
 
 # ============== CLEARTRIP RELAY ==============
 
