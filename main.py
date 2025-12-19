@@ -289,14 +289,14 @@ async def get_location_by_id(location_id: int):
 
 # ============== HOTELS ENDPOINTS ==============
 
-@app.get("/api/hotels/search")
+@app.get("/api/hotel-search")
 async def search_hotels(q: str = "", location_id: int = None, min_rating: float = None, limit: int = 20):
     """
     Search hotels by name or filter by location/rating
     
     Usage: 
-    - /api/hotels/search?q=europe
-    - /api/hotels/search?location_id=34849&min_rating=3
+    - /api/hotel-search?q=europe
+    - /api/hotel-search?location_id=34849&min_rating=3
     """
     try:
         conn = get_db_connection()
