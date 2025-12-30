@@ -67,7 +67,7 @@ async def get_flight_token():
                     "email": FLIGHT_EMAIL,
                     "password": FLIGHT_PASSWORD,
                     "returnSecureToken": True,
-                    "partnerTenantId": FLIGHT_TENANT_ID
+                    "tenantId": FLIGHT_TENANT_ID
                 },
                 headers={"Content-Type": "application/json"}
             )
