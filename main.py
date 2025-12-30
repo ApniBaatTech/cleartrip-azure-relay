@@ -24,7 +24,7 @@ app.add_middleware(
 
 # Environment variables
 CLEARTRIP_BASE_URL = os.getenv("CLEARTRIP_BASE_URL", "https://b2b.cleartrip.com")
-CLEARTRIP_FLIGHT_BASE_URL = os.getenv("CLEARTRIP_FLIGHT_BASE_URL", "https://api.cleartrip.com/air/api/v4")
+CLEARTRIP_FLIGHT_BASE_URL = os.getenv("CLEARTRIP_FLIGHT_BASE_URL", "https://qa-air-b2b.cleartrip.com")
 CLEARTRIP_API_KEY = os.getenv("CLEARTRIP_API_KEY", "")
 
 # Flight API credentials
@@ -62,7 +62,7 @@ async def get_flight_token():
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/login",
+                f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v4/login",
                 json={
                     "email": FLIGHT_EMAIL,
                     "password": FLIGHT_PASSWORD,
@@ -108,7 +108,7 @@ async def refresh_flight_token():
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/refresh",
+                f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v4/refresh",
                 json={"refreshToken": flight_token_cache["refreshToken"]},
                 headers={
                     "Content-Type": "application/json",
@@ -296,293 +296,85 @@ async def flight_refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/flights/search")
-async def flight_search(request: Request):
+@app.api_route("/api/flights/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def flight_relay(path: str, request: Request):
     """
-    Search for flights
-    
-    Body example:
-    {
-        "searchQuery": {
-            "cabinClass": "ECONOMY",
-            "paxInfo": {"adults": 1, "children": 0, "infants": 0}
-        },
-        "routeInfos": [{
-            "fromCityOrAirport": {"code": "DEL"},
-            "toCityOrAirport": {"code": "BOM"},
-            "travelDate": "2025-02-15"
-        }]
-    }
+    Universal relay for all Cleartrip Flight APIs
+    Just like the hotel relay, but with Bearer token authentication
     """
     try:
+        # Get valid token
         token = await get_flight_token()
-        body = await request.json()
         
+        # Get request body if present
+        body = None
+        if request.method in ["POST", "PUT"]:
+            try:
+                body = await request.json()
+            except:
+                pass
+        
+        # Get query params
+        params = dict(request.query_params)
+        
+        # Build headers with token
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Forward session ID if present
+        session_id = request.headers.get("x-ct-session-id")
+        if session_id:
+            headers["x-ct-session-id"] = session_id
+        
+        # Build full URL
+        full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v4/{path}"
+        
+        logger.info(f"🔍 === CLEARTRIP FLIGHT API REQUEST ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Endpoint: /air/api/v4/{path}")
+        logger.info(f"URL: {full_url}")
+        
+        # Make request to Cleartrip
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/search",
+            response = await client.request(
+                method=request.method,
+                url=full_url,
                 json=body,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                }
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Search error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/flights/session")
-async def flight_session(request: Request):
-    """
-    Create a session for booking flow
-    
-    Body: {"searchId": "search_12345"}
-    """
-    try:
-        token = await get_flight_token()
-        body = await request.json()
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/session",
-                json=body,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                }
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Session error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/flights/preview")
-async def flight_preview(request: Request):
-    """
-    Get flight preview details
-    
-    Headers: x-ct-session-id
-    Body: {"travelOptionId": "option_123"}
-    """
-    try:
-        token = await get_flight_token()
-        body = await request.json()
-        session_id = request.headers.get("x-ct-session-id")
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        if session_id:
-            headers["x-ct-session-id"] = session_id
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/preview",
-                json=body,
+                params=params,
                 headers=headers
             )
             
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
+            logger.info(f"📡 Response Status: {response.status_code}")
             
-    except Exception as e:
-        logger.error(f"❌ Preview error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/flights/hold")
-async def flight_hold(request: Request):
-    """
-    Hold a flight (lock the fare)
+            try:
+                response_data = response.json()
+                return JSONResponse(
+                    content=response_data,
+                    status_code=response.status_code
+                )
+            except:
+                return JSONResponse(
+                    content={
+                        "error": "Non-JSON response from Cleartrip",
+                        "status_code": response.status_code,
+                        "response_text": response.text[:2000]
+                    },
+                    status_code=response.status_code if response.status_code >= 400 else 500
+                )
+            
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout Error: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request to Cleartrip timed out")
     
-    Headers: x-ct-session-id
-    Body: {passenger and contact details}
-    """
-    try:
-        token = await get_flight_token()
-        body = await request.json()
-        session_id = request.headers.get("x-ct-session-id")
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        if session_id:
-            headers["x-ct-session-id"] = session_id
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/hold",
-                json=body,
-                headers=headers
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Hold error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/flights/book")
-async def flight_book(request: Request):
-    """
-    Book a flight (create PNR)
+    except httpx.HTTPError as e:
+        logger.error(f"❌ HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
     
-    Headers: x-ct-session-id
-    Body: {"travelId": "travel_xyz"}
-    """
-    try:
-        token = await get_flight_token()
-        body = await request.json()
-        session_id = request.headers.get("x-ct-session-id")
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        if session_id:
-            headers["x-ct-session-id"] = session_id
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/book",
-                json=body,
-                headers=headers
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
     except Exception as e:
-        logger.error(f"❌ Book error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/flights/ancillary")
-async def flight_ancillary(request: Request):
-    """
-    Get ancillary services (seats, meals, baggage)
-    
-    Headers: x-ct-session-id
-    Body: {"travelOptionId": "option_123"}
-    """
-    try:
-        token = await get_flight_token()
-        body = await request.json()
-        session_id = request.headers.get("x-ct-session-id")
-        
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
-        if session_id:
-            headers["x-ct-session-id"] = session_id
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/ancillary",
-                json=body,
-                headers=headers
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Ancillary error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/flights/airports")
-async def flight_airports(query: str = ""):
-    """
-    Airport autocomplete search
-    
-    Query param: query (e.g., ?query=del)
-    """
-    try:
-        token = await get_flight_token()
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/airport-suggest",
-                params={"query": query},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                }
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Airport search error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/flights/fare-calendar")
-async def flight_fare_calendar(origin: str, destination: str, date: str):
-    """
-    Get fare calendar for route
-    
-    Query params: origin, destination, date
-    """
-    try:
-        token = await get_flight_token()
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{CLEARTRIP_FLIGHT_BASE_URL}/fare-calendar",
-                params={
-                    "origin": origin,
-                    "destination": destination,
-                    "date": date
-                },
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json"
-                }
-            )
-            
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
-            
-    except Exception as e:
-        logger.error(f"❌ Fare calendar error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
 # ============== LOCATIONS ENDPOINTS (keeping existing) ==============
