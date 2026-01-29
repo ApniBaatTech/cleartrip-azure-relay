@@ -9,6 +9,39 @@ import pytds
 from typing import Optional
 from datetime import datetime, timedelta
 
+# Add this after the logging setup, before app = FastAPI()
+
+import math
+
+def haversine(lat1, lon1, lat2, lon2):
+    """Calculate distance between two points in kilometers"""
+    R = 6371  # Earth's radius in km
+    
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    
+    a = (math.sin(dlat/2)**2 + 
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * 
+         math.sin(dlon/2)**2)
+    
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    distance = R * c
+    
+    return distance
+
+
+def get_lat_lng_bounds(lat, lng, radius_km):
+    """Convert radius to lat/lng bounding box"""
+    lat_change = radius_km / 111.0
+    lng_change = radius_km / (111.0 * math.cos(math.radians(lat)))
+    
+    return {
+        'lat_min': lat - lat_change,
+        'lat_max': lat + lat_change,
+        'lng_min': lng - lng_change,
+        'lng_max': lng + lng_change
+    }
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -695,6 +728,81 @@ async def get_hotel_by_id(hotel_id: int):
         return {
             "status": "error",
             "message": str(e)
+        }
+
+# Add this after your existing @app.get("/api/hotels/{hotel_id}") endpoint
+@app.get("/api/hotels/nearby")
+async def get_nearby_hotels(
+    lat: float, 
+    lng: float, 
+    radius: int = 5,
+    limit: int = 50
+):
+    """
+    Get hotels within radius (km) of given lat/lng
+    Optimized with bounding box + Haversine filter
+    
+    Example: /api/hotels/nearby?lat=28.6139&lng=77.2090&radius=5
+    """
+    try:
+        # Step 1: Calculate bounding box
+        bounds = get_lat_lng_bounds(lat, lng, radius)
+        
+        # Step 2: Query with bounding box filter (fast SQL filter)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT id, name, star_rating, property_type, address, pincode,
+                   latitude, longitude, location_id, total_rooms, total_floors,
+                   check_in_time, check_out_time, images, amenities
+            FROM hotels
+            WHERE latitude BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+        """
+        
+        cursor.execute(query, (
+            bounds['lat_min'], 
+            bounds['lat_max'],
+            bounds['lng_min'], 
+            bounds['lng_max']
+        ))
+        
+        hotels = cursor.fetchall()
+        conn.close()
+        
+        # Step 3: Apply precise Haversine distance filter
+        nearby = []
+        for hotel in hotels:
+            if hotel['latitude'] and hotel['longitude']:
+                distance = haversine(lat, lng, hotel['latitude'], hotel['longitude'])
+                
+                if distance <= radius:
+                    hotel_data = dict(hotel)
+                    hotel_data['distance_km'] = round(distance, 2)
+                    nearby.append(hotel_data)
+        
+        # Step 4: Sort by distance and limit results
+        nearby.sort(key=lambda x: x['distance_km'])
+        nearby = nearby[:limit]
+        
+        return {
+            "status": "success",
+            "search_center": {
+                "latitude": lat,
+                "longitude": lng
+            },
+            "radius_km": radius,
+            "total_found": len(nearby),
+            "hotels": nearby
+        }
+        
+    except Exception as e:
+        logger.error(f"Nearby hotels error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "hotels": []
         }
 
 
