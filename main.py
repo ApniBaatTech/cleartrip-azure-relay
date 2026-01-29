@@ -683,54 +683,6 @@ async def get_hotels_by_location(location_id: int, limit: int = 50, offset: int 
         }
 
 
-@app.get("/api/hotels/{hotel_id}")
-async def get_hotel_by_id(hotel_id: int):
-    """Get single hotel with all details including rooms"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT h.*, l.name as city_name, l.type as city_type
-            FROM hotels h
-            JOIN locations l ON h.location_id = l.id
-            WHERE h.id = %s
-        """, (hotel_id,))
-        
-        hotel = cursor.fetchone()
-        
-        if not hotel:
-            conn.close()
-            return {
-                "status": "error",
-                "message": f"Hotel {hotel_id} not found"
-            }
-        
-        cursor.execute("""
-            SELECT id, name, area_value, area_unit, max_occupancy, 
-                   max_adults, max_children, amenities, images
-            FROM hotel_rooms 
-            WHERE hotel_id = %s
-            ORDER BY name
-        """, (hotel_id,))
-        
-        rooms = cursor.fetchall()
-        conn.close()
-        
-        return {
-            "status": "success",
-            "hotel": hotel,
-            "rooms": rooms
-        }
-        
-    except Exception as e:
-        logger.error(f"Get hotel error: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-# Add this after your existing @app.get("/api/hotels/{hotel_id}") endpoint
 @app.get("/api/hotels/nearby")
 async def get_nearby_hotels(
     lat: float, 
@@ -803,6 +755,54 @@ async def get_nearby_hotels(
             "status": "error",
             "message": str(e),
             "hotels": []
+        }
+
+
+@app.get("/api/hotels/{hotel_id}")
+async def get_hotel_by_id(hotel_id: int):
+    """Get single hotel with all details including rooms"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT h.*, l.name as city_name, l.type as city_type
+            FROM hotels h
+            JOIN locations l ON h.location_id = l.id
+            WHERE h.id = %s
+        """, (hotel_id,))
+        
+        hotel = cursor.fetchone()
+        
+        if not hotel:
+            conn.close()
+            return {
+                "status": "error",
+                "message": f"Hotel {hotel_id} not found"
+            }
+        
+        cursor.execute("""
+            SELECT id, name, area_value, area_unit, max_occupancy, 
+                   max_adults, max_children, amenities, images
+            FROM hotel_rooms 
+            WHERE hotel_id = %s
+            ORDER BY name
+        """, (hotel_id,))
+        
+        rooms = cursor.fetchall()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "hotel": hotel,
+            "rooms": rooms
+        }
+        
+    except Exception as e:
+        logger.error(f"Get hotel error: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
         }
 
 
