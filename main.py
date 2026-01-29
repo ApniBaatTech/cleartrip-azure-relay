@@ -690,17 +690,9 @@ async def get_nearby_hotels(
     radius: int = 5,
     limit: int = 50
 ):
-    """
-    Get hotels within radius (km) of given lat/lng
-    Optimized with bounding box + Haversine filter
-    
-    Example: /api/hotels/nearby?lat=28.6139&lng=77.2090&radius=5
-    """
     try:
-        # Step 1: Calculate bounding box
         bounds = get_lat_lng_bounds(lat, lng, radius)
         
-        # Step 2: Query with bounding box filter (fast SQL filter)
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -723,27 +715,28 @@ async def get_nearby_hotels(
         hotels = cursor.fetchall()
         conn.close()
         
-        # Step 3: Apply precise Haversine distance filter
         nearby = []
         for hotel in hotels:
             if hotel['latitude'] and hotel['longitude']:
-                distance = haversine(lat, lng, hotel['latitude'], hotel['longitude'])
+                # 👇 CRITICAL: Convert Decimal to float
+                hotel_lat = float(hotel['latitude'])
+                hotel_lng = float(hotel['longitude'])
+                
+                distance = haversine(lat, lng, hotel_lat, hotel_lng)
                 
                 if distance <= radius:
                     hotel_data = dict(hotel)
                     hotel_data['distance_km'] = round(distance, 2)
+                    hotel_data['latitude'] = hotel_lat
+                    hotel_data['longitude'] = hotel_lng
                     nearby.append(hotel_data)
         
-        # Step 4: Sort by distance and limit results
         nearby.sort(key=lambda x: x['distance_km'])
         nearby = nearby[:limit]
         
         return {
             "status": "success",
-            "search_center": {
-                "latitude": lat,
-                "longitude": lng
-            },
+            "search_center": {"latitude": lat, "longitude": lng},
             "radius_km": radius,
             "total_found": len(nearby),
             "hotels": nearby
