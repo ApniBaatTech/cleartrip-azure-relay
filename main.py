@@ -9,8 +9,6 @@ import pytds
 from typing import Optional
 from datetime import datetime, timedelta
 
-# Add this after the logging setup, before app = FastAPI()
-
 import math
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -192,17 +190,18 @@ async def root():
     return {
         "service": "Cleartrip Relay",
         "status": "running",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "apis_supported": [
             "B2B V4 Hotels - All Endpoints",
             "Flight API V4 - All Endpoints",
+            "Flight ExtAPI - Trip Management",
             "Locations DB"
         ],
         "endpoints": {
             "hotels": {
                 "content": [
                     "/locations",
-                    "/location/hotels", 
+                    "/location/hotels",
                     "/hotel-profile",
                     "/incremental-updates"
                 ],
@@ -238,6 +237,13 @@ async def root():
                     "/api/flights/ancillary",
                     "/api/flights/fare-benefits",
                     "/api/flights/fare-calendar"
+                ],
+                "trip_management": [
+                    "GET  /api/flights/extapi/air/trips/json/3.0/view/{tripId}",
+                    "POST /api/flights/extapi/air/trip/cancel/1.0/{tripId}",
+                    "GET  /api/flights/extapi/air/trip/refund-info/1.0/{tripId}/{reasonCode}",
+                    "GET  /api/flights/extapi/air/3.0/refund-info/{tripId}",
+                    "GET  /api/flights/extapi/air/trip/cancel-reasons/1.0/{tripId}"
                 ]
             },
             "database": [
@@ -329,17 +335,102 @@ async def flight_refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ============== FLIGHT EXTAPI ENDPOINTS ==============
+# Maps: /api/flights/extapi/{path} → {CLEARTRIP_FLIGHT_BASE_URL}/extapi/{path}
+#
+# Covers:
+# 1. View Trip         GET  /api/flights/extapi/air/trips/json/3.0/view/{tripId}
+# 2. Cancel Trip       POST /api/flights/extapi/air/trip/cancel/1.0/{tripId}
+# 3. Refund Info (Pre) GET  /api/flights/extapi/air/trip/refund-info/1.0/{tripId}/{reasonCode}
+# 4. Refund Info (Post)GET  /api/flights/extapi/air/3.0/refund-info/{tripId}
+# 5. Cancel Reasons    GET  /api/flights/extapi/air/trip/cancel-reasons/1.0/{tripId}
+# ⚠️ IMPORTANT: This route MUST be placed above the /api/flights/{path} catch-all
+
+@app.api_route("/api/flights/extapi/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def flight_extapi_relay(path: str, request: Request):
+    """
+    Relay for Cleartrip Flight extapi endpoints (trip management)
+    """
+    try:
+        token = await get_flight_token()
+
+        body = None
+        if request.method in ["POST", "PUT"]:
+            try:
+                body = await request.json()
+            except:
+                pass
+
+        params = dict(request.query_params)
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        session_id = request.headers.get("x-ct-session-id")
+        if session_id:
+            headers["x-ct-session-id"] = session_id
+
+        full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/extapi/{path}"
+
+        logger.info(f"🔍 === CLEARTRIP FLIGHT EXTAPI REQUEST ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Endpoint: /extapi/{path}")
+        logger.info(f"URL: {full_url}")
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.request(
+                method=request.method,
+                url=full_url,
+                json=body,
+                params=params,
+                headers=headers
+            )
+
+            logger.info(f"📡 Response Status: {response.status_code}")
+
+            try:
+                response_data = response.json()
+                return JSONResponse(
+                    content=response_data,
+                    status_code=response.status_code
+                )
+            except:
+                return JSONResponse(
+                    content={
+                        "error": "Non-JSON response from Cleartrip",
+                        "status_code": response.status_code,
+                        "response_text": response.text[:2000]
+                    },
+                    status_code=response.status_code if response.status_code >= 400 else 500
+                )
+
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout Error: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request to Cleartrip timed out")
+
+    except httpx.HTTPError as e:
+        logger.error(f"❌ HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+# ============== FLIGHT V4 CATCH-ALL ==============
+# Maps: /api/flights/{path} → {CLEARTRIP_FLIGHT_BASE_URL}/air/api/v4/{path}
+# ⚠️ IMPORTANT: Must stay BELOW the extapi route
+
 @app.api_route("/api/flights/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def flight_relay(path: str, request: Request):
     """
-    Universal relay for all Cleartrip Flight APIs
-    Just like the hotel relay, but with Bearer token authentication
+    Universal relay for all Cleartrip Flight V4 APIs
     """
     try:
-        # Get valid token
         token = await get_flight_token()
         
-        # Get request body if present
         body = None
         if request.method in ["POST", "PUT"]:
             try:
@@ -347,21 +438,17 @@ async def flight_relay(path: str, request: Request):
             except:
                 pass
         
-        # Get query params
         params = dict(request.query_params)
         
-        # Build headers with token
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         
-        # Forward session ID if present
         session_id = request.headers.get("x-ct-session-id")
         if session_id:
             headers["x-ct-session-id"] = session_id
         
-        # Build full URL
         full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v4/{path}"
         
         logger.info(f"🔍 === CLEARTRIP FLIGHT API REQUEST ===")
@@ -369,7 +456,6 @@ async def flight_relay(path: str, request: Request):
         logger.info(f"Endpoint: /air/api/v4/{path}")
         logger.info(f"URL: {full_url}")
         
-        # Make request to Cleartrip
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.request(
                 method=request.method,
@@ -410,7 +496,7 @@ async def flight_relay(path: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
-# ============== LOCATIONS ENDPOINTS (keeping existing) ==============
+# ============== LOCATIONS ENDPOINTS ==============
 
 @app.get("/api/locations/autocomplete")
 async def autocomplete_locations(q: str = "", limit: int = 10):
@@ -570,7 +656,7 @@ async def get_location_by_id(location_id: int):
         }
 
 
-# ============== HOTELS ENDPOINTS (keeping existing) ==============
+# ============== HOTELS ENDPOINTS ==============
 
 @app.get("/api/hotel-search")
 async def search_hotels(q: str = "", location_id: int = None, min_rating: float = None, limit: int = 20):
@@ -718,7 +804,6 @@ async def get_nearby_hotels(
         nearby = []
         for hotel in hotels:
             if hotel['latitude'] and hotel['longitude']:
-                # 👇 CRITICAL: Convert Decimal to float
                 hotel_lat = float(hotel['latitude'])
                 hotel_lng = float(hotel['longitude'])
                 
@@ -799,7 +884,7 @@ async def get_hotel_by_id(hotel_id: int):
         }
 
 
-# ============== CLEARTRIP HOTEL RELAY (keeping existing) ==============
+# ============== CLEARTRIP HOTEL RELAY ==============
 
 def get_required_headers(path: str, method: str) -> dict:
     """Determine required headers for hotel endpoints"""
@@ -896,7 +981,7 @@ async def detailed_status():
     return {
         "service": "Cleartrip B2B V4 + Flight API Relay",
         "status": "operational",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "configuration": {
             "hotels": {
                 "base_url": CLEARTRIP_BASE_URL,
