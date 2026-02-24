@@ -346,6 +346,27 @@ async def flight_refresh():
 # 5. Cancel Reasons    GET  /api/flights/extapi/air/trip/cancel-reasons/1.0/{tripId}
 # ⚠️ IMPORTANT: This route MUST be placed above the /api/flights/{path} catch-all
 
+@app.get("/api/flights/view-trip/{trip_id}")
+async def view_trip(trip_id: str, request: Request):
+    token = await get_flight_token()
+    full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v3/trips/json/view/{trip_id}"
+    
+    logger.info(f"🔍 VIEW TRIP → {full_url}")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.get(
+            full_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+        )
+        try:
+            return JSONResponse(content=response.json(), status_code=response.status_code)
+        except:
+            return JSONResponse(content={"error": response.text[:2000]}, status_code=500)
+
+
 @app.api_route("/api/flights/extapi/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def flight_extapi_relay(path: str, request: Request):
     """
