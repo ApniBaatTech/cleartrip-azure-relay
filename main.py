@@ -367,6 +367,49 @@ async def view_trip(trip_id: str, request: Request):
             return JSONResponse(content={"error": response.text[:2000]}, status_code=500)
 
 
+@app.get("/api/flights/airports/search")
+async def airport_search(name: str, request: Request):
+    """
+    Airport Auto-suggest API
+    Maps to: https://air-b2b.cleartrip.com/air/api/v1/airports/search?name={name}
+    """
+    try:
+        token = await get_flight_token()
+
+        full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v1/airports/search"
+
+        logger.info(f"🔍 AIRPORT SEARCH → {full_url}?name={name}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                full_url,
+                params={"name": name},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+            )
+
+            logger.info(f"📡 Response Status: {response.status_code}")
+
+            try:
+                return JSONResponse(content=response.json(), status_code=response.status_code)
+            except:
+                return JSONResponse(content={"error": response.text[:2000]}, status_code=500)
+
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request timed out")
+
+    except httpx.HTTPError as e:
+        logger.error(f"❌ HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
 @app.api_route("/api/flights/extapi/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def flight_extapi_relay(path: str, request: Request):
     """
