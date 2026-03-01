@@ -492,6 +492,52 @@ async def refund_info_post(trip_id: str, request: Request):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 
+@app.post("/api/flights/cancel-trip/{trip_id}")
+async def cancel_trip(trip_id: str, request: Request):
+    """
+    Cancel Trip API
+    Maps to: https://air-b2b.cleartrip.com/air/api/v3/trip/cancel/{tripId}
+    """
+    try:
+        token = await get_flight_token()
+        body = await request.json()
+
+        full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v3/trip/cancel/{trip_id}"
+
+        logger.info(f"🔍 CANCEL TRIP → {full_url}")
+        logger.info(f"Body: {body}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                full_url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "accept": "application/json"
+                }
+            )
+
+            logger.info(f"📡 Response Status: {response.status_code}")
+
+            try:
+                return JSONResponse(content=response.json(), status_code=response.status_code)
+            except:
+                return JSONResponse(content={"error": response.text[:2000]}, status_code=500)
+
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request timed out")
+
+    except httpx.HTTPError as e:
+        logger.error(f"❌ HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
 
 @app.get("/api/flights/airports/search")
 async def airport_search(name: str, request: Request):
