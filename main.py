@@ -335,16 +335,6 @@ async def flight_refresh():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============== FLIGHT EXTAPI ENDPOINTS ==============
-# Maps: /api/flights/extapi/{path} → {CLEARTRIP_FLIGHT_BASE_URL}/extapi/{path}
-#
-# Covers:
-# 1. View Trip         GET  /api/flights/extapi/air/trips/json/3.0/view/{tripId}
-# 2. Cancel Trip       POST /api/flights/extapi/air/trip/cancel/1.0/{tripId}
-# 3. Refund Info (Pre) GET  /api/flights/extapi/air/trip/refund-info/1.0/{tripId}/{reasonCode}
-# 4. Refund Info (Post)GET  /api/flights/extapi/air/3.0/refund-info/{tripId}
-# 5. Cancel Reasons    GET  /api/flights/extapi/air/trip/cancel-reasons/1.0/{tripId}
-# ⚠️ IMPORTANT: This route MUST be placed above the /api/flights/{path} catch-all
 
 @app.get("/api/flights/view-trip/{trip_id}")
 async def view_trip(trip_id: str, request: Request):
@@ -456,6 +446,51 @@ async def cancel_refund_info(trip_id: str, reason_code: str, request: Request):
     except Exception as e:
         logger.error(f"❌ Unexpected Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@app.get("/api/flights/refund-info/{trip_id}")
+async def refund_info_post(trip_id: str, request: Request):
+    """
+    Post-cancellation Refund Info API
+    Maps to: https://air-b2b.cleartrip.com/air/api/v3/get-refund-info/{tripId}
+    """
+    try:
+        token = await get_flight_token()
+
+        full_url = f"{CLEARTRIP_FLIGHT_BASE_URL}/air/api/v3/get-refund-info/{trip_id}"
+
+        logger.info(f"🔍 REFUND INFO (POST-CANCEL) → {full_url}")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                full_url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "accept": "application/json",
+                    "x-ct-sourcetype": "B2C"
+                }
+            )
+
+            logger.info(f"📡 Response Status: {response.status_code}")
+
+            try:
+                return JSONResponse(content=response.json(), status_code=response.status_code)
+            except:
+                return JSONResponse(content={"error": response.text[:2000]}, status_code=500)
+
+    except httpx.TimeoutException as e:
+        logger.error(f"⏱️ Timeout: {str(e)}")
+        raise HTTPException(status_code=504, detail="Request timed out")
+
+    except httpx.HTTPError as e:
+        logger.error(f"❌ HTTP Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Cleartrip API Error: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
 
 
 @app.get("/api/flights/airports/search")
