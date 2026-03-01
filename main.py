@@ -190,11 +190,11 @@ async def root():
     return {
         "service": "Cleartrip Relay",
         "status": "running",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "apis_supported": [
             "B2B V4 Hotels - All Endpoints",
             "Flight API V4 - All Endpoints",
-            "Flight ExtAPI - Trip Management",
+            "Flight V3 - Trip Management",
             "Locations DB"
         ],
         "endpoints": {
@@ -239,11 +239,14 @@ async def root():
                     "/api/flights/fare-calendar"
                 ],
                 "trip_management": [
-                    "GET  /api/flights/extapi/air/trips/json/3.0/view/{tripId}",
-                    "POST /api/flights/extapi/air/trip/cancel/1.0/{tripId}",
-                    "GET  /api/flights/extapi/air/trip/refund-info/1.0/{tripId}/{reasonCode}",
-                    "GET  /api/flights/extapi/air/3.0/refund-info/{tripId}",
-                    "GET  /api/flights/extapi/air/trip/cancel-reasons/1.0/{tripId}"
+                     "GET  /api/flights/view-trip/{tripId}",
+                     "GET  /api/flights/cancel-reasons/{tripId}",
+                     "GET  /api/flights/cancel-refund-info/{tripId}/{reasonCode}",
+                     "GET  /api/flights/refund-info/{tripId}",
+                     "POST /api/flights/cancel-trip/{tripId}",
+                     "GET  /api/flights/airports/search?name={query}",
+                     "POST /api/flights/fare-calendar"
+                    
                 ]
             },
             "database": [
@@ -1191,7 +1194,7 @@ async def detailed_status():
     return {
         "service": "Cleartrip B2B V4 + Flight API Relay",
         "status": "operational",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "configuration": {
             "hotels": {
                 "base_url": CLEARTRIP_BASE_URL,
