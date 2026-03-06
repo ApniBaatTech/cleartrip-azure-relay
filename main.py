@@ -996,9 +996,9 @@ async def get_nearby_hotels(
         cursor = conn.cursor()
         
         query = """
-            SELECT id, name, star_rating, property_type, address, pincode,
-                   latitude, longitude, location_id, total_rooms, total_floors,
-                   check_in_time, check_out_time, images, amenities
+            SELECT id, name, star_rating,
+                   latitude, longitude, location_id,
+                   featured_image_url, amenities
             FROM hotels
             WHERE latitude BETWEEN %s AND %s
               AND longitude BETWEEN %s AND %s
